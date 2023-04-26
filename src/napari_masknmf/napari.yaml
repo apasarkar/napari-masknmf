@@ -5,6 +5,9 @@ contributions:
     - id: napari-masknmf.get_reader
       python_name: napari_masknmf._reader:napari_get_reader
       title: Open data with MaskNMF Demixing
+    - id: napari-masknmf.get_pmd_reader
+      python_name: napari_masknmf._reader:napari_get_PMD_reader
+      title: View PMD compressed video
     - id: napari-masknmf.write_multiple
       python_name: napari_masknmf._writer:write_multiple
       title: Save multi-layer data with MaskNMF Demixing
@@ -27,6 +30,9 @@ contributions:
     - command: napari-masknmf.get_reader
       accepts_directories: false
       filename_patterns: ['*.npy']
+    - command: napari-masknmf.get_pmd_reader
+      accepts_directories: false
+      filename_patterns: ["*.npz"]
   writers:
     - command: napari-masknmf.write_multiple
       layer_types: ['image*','labels*']

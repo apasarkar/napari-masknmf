@@ -6,6 +6,118 @@ implement multiple readers or even other plugin contributions. see:
 https://napari.org/stable/plugins/guides.html?#readers
 """
 import numpy as np
+from numpy.typing import DTypeLike
+import scipy
+import scipy.sparse
+
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Protocol,
+    Tuple,
+    Union,
+    runtime_checkable,
+)
+
+
+if TYPE_CHECKING:
+    from enum import Enum
+
+    from numpy.typing import DTypeLike
+
+    # https://github.com/python/typing/issues/684#issuecomment-548203158
+    class ellipsis(Enum):
+        Ellipsis = "..."
+
+    Ellipsis = ellipsis.Ellipsis  # noqa: A001
+else:
+    ellipsis = type(Ellipsis)
+
+
+Index = Union[int, slice, ellipsis]
+
+from napari.layers._data_protocols import LayerDataProtocol
+
+def Factorized_PMD_video(LayerDataProtocol):
+    
+    def __init__(self, filepath):
+        self.filepath = filepath
+        data = np.load(filepath, allow_pickle=True)
+        self.order = data['fov_order']
+        self.d1, self.d2 = data['fov_shape']
+        print("the shape of d1 and d2 is {} and {}".format(self.d1, self.d2))
+        self.U_sparse = scipy.sparse.csr_matrix(
+        (data['U_data'], data['U_indices'], data['U_indptr']),
+        shape=data['U_shape'])
+        R = data['R']
+        s = data['s']
+        V = data['Vt']
+        self.V = (R * s[None, :]).dot(V) #Fewer computations
+        self.T = self.V.shape[1]
+    
+    @property
+    def dtype(self) -> DTypeLike:
+        """Data type of the array elements."""
+        return self.V.dtype
+        
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Array dimensions."""
+        
+        return (self.d1, self.d2, self.T)
+    
+    def __getitem__(
+        self, key #: Union[Index, Tuple[Index, ...], LayerDataProtocol]
+    ) -> LayerDataProtocol:
+        """Returns self[key]."""
+        print("key is {}".format(key))
+        output = (self.U_sparse.dot(self.V[:, key])).reshape((self.d1, self.d2), order=self.order)
+        print("the type of output is {}".format(type(output)))
+        print("the shape of output is {}".format(output.shape))
+        return output
+
+def napari_get_PMD_reader(path):
+    """
+    A reader contribution for PMD objects
+    
+    Parameters
+    ----------
+    path : str or list of str
+        Path to file, or list of paths.
+      
+    Returns
+    -------
+    function or None
+        If the path is a recognized format, returns a PMD_frame_generator function. This
+        function will generate subsequence frames of the PMD object
+    """
+    
+    if isinstance(path, list):
+        path = path[0]
+        
+    if not path.endswith(".npz"):
+        return None
+    
+    ##Here is some code to verify that the .npz file contains the things we want it to contain 
+    
+    datafile = np.load(path, allow_pickle=True)
+    
+    key_list = ['U_data', 'U_indices', 'U_indptr', 'U_shape', 'fov_order', 'fov_shape', 'R', 's', 'Vt']
+    for k in key_list:
+        if k not in datafile.keys():
+            return None
+    
+    return PMD_frame_generate
+    
+def PMD_frame_generate(path):
+    """
+    Generates a frame from a PMD object
+    """
+    pmd_object = Factorized_PMD_video(path)
+    print("the object was created successfully")
+    return [(pmd_object,)]
+
 
 
 def napari_get_reader(path):
