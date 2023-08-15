@@ -8,6 +8,9 @@ contributions:
     - id: napari-masknmf.get_pmd_reader
       python_name: napari_masknmf._reader:napari_get_PMD_reader
       title: View PMD compressed video
+    - id: napari-masknmf.get_tiff_reader
+      python_name: napari_masknmf._raw_data_reader:napari_get_tiff_reader
+      title: View a raw tiff stack
     - id: napari-masknmf.write_multiple
       python_name: napari_masknmf._writer:write_multiple
       title: Save multi-layer data with MaskNMF Demixing
@@ -33,6 +36,9 @@ contributions:
     - command: napari-masknmf.get_pmd_reader
       accepts_directories: false
       filename_patterns: ["*.npz"]
+    - command: napari-masknmf.get_tiff_reader
+      accepts_directories: false
+      filename_patterns: ['*.tif', '*.tiff']
   writers:
     - command: napari-masknmf.write_multiple
       layer_types: ['image*','labels*']
