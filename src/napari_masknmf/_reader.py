@@ -140,16 +140,13 @@ def PMD_frame_generate(path):
     """
     pmd_object = Factorized_PMD_video(path)
     print("the object was created successfully")
-#     my_data = np.random.rand(200, 200, 100)
-#     return [(my_data,)]
 
-    add_kwargs = {}
+    add_kwargs = {'name':'PMD'}
     layer_type = "image"  # optional, default is "image"
     my_output = [(pmd_object,add_kwargs,layer_type)]
     print(guess_multiscale(my_output))
     print("the type of pmd_object is {}".format(type(pmd_object)))
     print("TEST")
-#     print(guess_multiscale(pmd_object))
     return my_output
 
 
