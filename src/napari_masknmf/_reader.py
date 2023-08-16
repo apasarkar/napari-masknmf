@@ -42,16 +42,11 @@ from napari.layers.image._image_utils import guess_multiscale
 class Factorized_PMD_video(LayerDataProtocol):
     
     def __init__(self, filepath):
-        print("ENTERED INIT_NEWDOC")
+        print("ENTERED INIT_NEWDOC_NEW")
         self.filepath = filepath
-        print("SELF FILE PATH DONE")
         data = np.load(filepath, allow_pickle=True)
-        print("NP LOAD DONE")
         self.order = data['fov_order'].item()
-        print("FOV ORDER DONE")
         self.d1, self.d2 = data['fov_shape']
-        print("FOV SHAPE DONE")
-        print("the shape of d1 and d2 is {} and {}".format(self.d1, self.d2))
         self.U_sparse = scipy.sparse.csr_matrix(
         (data['U_data'], data['U_indices'], data['U_indptr']),
         shape=data['U_shape'])
@@ -62,6 +57,7 @@ class Factorized_PMD_video(LayerDataProtocol):
         self.T = self.V.shape[1]
         self.mean_img = data['mean_img']
         self.var_img = data['noise_var_img']
+        self.row_indices = np.arange(self.d1*self.d2).reshape((self.d1, self.d2), order=self.order)
     
     @property
     def dtype(self) -> DTypeLike:
@@ -78,28 +74,23 @@ class Factorized_PMD_video(LayerDataProtocol):
     @property
     def shape(self) -> Tuple[int, ...]:
         """Array dimensions."""
-        
         return (self.T, self.d1, self.d2)
     
     def __getitem__(
         self, key #: Union[Index, Tuple[Index, ...], LayerDataProtocol]
     ) -> LayerDataProtocol:
         """Returns self[key]."""
-        print("key is {}".format(key))
-        if isinstance(key[0], slice):
-            raise ValueError("UHOH")
-        output = (self.U_sparse.dot(self.V[:, key[0]])).reshape((self.d1, self.d2, -1), order=self.order)
-        output = output[key[1], key[2], :].squeeze()
-        output = output * self.var_img + self.mean_img
-        print("the type of output is {}".format(type(output)))
-        print("the shape of output is {}".format(output.shape))
-        print("NEWER")
-        return output
-    
-    def __array__(self) -> np.ndarray:
-        print("called __array__")
-        product = self.U_sparse.dot(self.V)
-        return product.reshape((self.d1, self.d2, -1), order=self.order)
+        if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing rows
+            U_used = self.U_sparse
+            implied_fov_shape = (self.d1, self.d2)
+        else:
+            used_rows = self.row_indices[key[1:3]]
+            implied_fov_shape = used_rows.shape
+            U_used = self.U_sparse[used_rows.reshape((-1,), order=self.order)]
+
+        output = U_used.dot(self.V[:, key[0]]).reshape(implied_fov_shape + (-1,), order=self.order)
+        output = output * self.var_img[(key[1], key[2], None)] + self.mean_img[(key[1], key[2], None)]
+        return output.squeeze()
 
 def napari_get_PMD_reader(path):
     """
@@ -139,12 +130,15 @@ def PMD_frame_generate(path):
     Generates a frame from a PMD object
     """
     pmd_object = Factorized_PMD_video(path)
+    pmd_object2 = Factorized_PMD_video(path)
+    
     print("the object was created successfully")
 
     add_kwargs = {'name':'PMD'}
+    add_kwargs2 = {'name':'PMD2'}
     layer_type = "image"  # optional, default is "image"
-    my_output = [(pmd_object,add_kwargs,layer_type)]
-    print(guess_multiscale(my_output))
+    my_output = [(pmd_object,add_kwargs,layer_type), (pmd_object2, add_kwargs2, layer_type)]
+    # print(guess_multiscale(my_output))
     print("the type of pmd_object is {}".format(type(pmd_object)))
     print("TEST")
     return my_output
