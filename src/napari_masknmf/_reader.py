@@ -64,7 +64,7 @@ class BackgroundPMDMovie(LayerDataProtocol):
     @property
     def dtype(self) -> DTypeLike:
         """Data type of the array elements."""
-        return self.V.dtype
+        return np.float32
 
 
     @property
@@ -108,8 +108,48 @@ class BackgroundPMDMovie(LayerDataProtocol):
             output = output.reshape(implied_fov_shape + (-1,), order=self.order)
             output *= self.var_img[(key[1], key[2], None)]
 
-        return output.squeeze()
+        return output.squeeze().astype(self.dtype)
+
+
+class ResidualPMDMovie(LayerDataProtocol):  
+    def __init__(self, PMDMovie, BackgroundMovie, ACMovie):
+        self.PMDMovie = PMDMovie
+        self.BackgroundMovie = BackgroundMovie
+        self.ACMovie = ACMovie
+        self.mean_img = self.PMDMovie.mean_img
+        self.T, self.d1, self.d2 = self.PMDMovie.shape
     
+        
+    @property
+    def dtype(self) -> DTypeLike:
+        """Data type of the array elements."""
+        return np.float32
+
+
+    @property
+    def ndim(self) -> int:
+        """
+        Returns number of dimensions of data
+        """
+        return 2
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Array dimensions."""
+        return (self.T, self.d1, self.d2)
+
+    def __getitem__(
+        self, key #: Union[Index, Tuple[Index, ...], LayerDataProtocol]
+    ) -> LayerDataProtocol:
+        """Returns self[key]. Compute Proj_{UR} W(UV - b) + b"""
+        output = self.PMDMovie[key] - self.ACMovie[key] - self.BackgroundMovie[key]
+        if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing rows
+            output -= self.mean_img
+        else: #In this case we are taking slices across time
+            output -= self.mean_img[(key[1], key[2])]
+        return output.squeeze().astype(self.dtype)
+
+
 class SignalPMDMovie(LayerDataProtocol):
     
     def __init__(self, filepath):
@@ -127,7 +167,7 @@ class SignalPMDMovie(LayerDataProtocol):
     @property
     def dtype(self) -> DTypeLike:
         """Data type of the array elements."""
-        return self.c.dtype
+        return np.float32
 
 
     @property
@@ -156,7 +196,7 @@ class SignalPMDMovie(LayerDataProtocol):
 
         output = a_used.dot(self.c[:, key[0]]).reshape(implied_fov_shape + (-1,), order=self.order)
         output = output * self.var_img[(key[1], key[2], None)]
-        return output.squeeze()
+        return output.squeeze().astype(self.dtype)
 
 
 
@@ -182,7 +222,7 @@ class Factorized_PMD_video(LayerDataProtocol):
     @property
     def dtype(self) -> DTypeLike:
         """Data type of the array elements."""
-        return self.V.dtype
+        return np.float32
         
     @property
     def ndim(self) -> int:
@@ -210,7 +250,7 @@ class Factorized_PMD_video(LayerDataProtocol):
 
         output = U_used.dot(self.V[:, key[0]]).reshape(implied_fov_shape + (-1,), order=self.order)
         output = output * self.var_img[(key[1], key[2], None)] + self.mean_img[(key[1], key[2], None)]
-        return output.squeeze()
+        return output.squeeze().astype(self.dtype)
 
 def napari_get_PMD_reader(path):
     """
@@ -249,33 +289,37 @@ def PMD_frame_generate(path):
     """
     Generates a frame from a PMD object
     """
-    datafile = np.load(path, allow_pickle=True)
+    keyset = np.load(path, allow_pickle=True).keys()
     
     layer_list = []
-    if 'U_data' in datafile.keys(): #Rough check to verify that there is PMD data in the file:
+    if 'U_data' in keyset: #Rough check to verify that there is PMD data in the file:
         pmd_object = Factorized_PMD_video(path)
         add_kwargs = {'name':'PMD'}
         layer_type="image"
         layer_list.append((pmd_object, add_kwargs, layer_type))
         print("successfully added PMD")
-    if 'a' in datafile.keys():
+        
+    if 'a' in keyset:
         grayscale_signal_object = SignalPMDMovie(path)
         add_kwargs = {'name':'Signals'}
         layer_type="image"
         layer_list.append((grayscale_signal_object, add_kwargs, layer_type))
         print("successsfully added AC")
     
-    if 'a' in datafile.keys():
+    if 'a' in keyset:
         pass #Here insert the colored PMD video
     
-    if 'W' in datafile.keys():
+    if 'W' in keyset:
         background_movie =  BackgroundPMDMovie(path)
         add_kwargs = {'name':'Background'} 
         layer_type = "image"
         layer_list.append((background_movie, add_kwargs, layer_type))
     
-    if 'W' in datafile.keys() and 'a' in datafile.keys():
-        pass #Insert the residual video. Make a residual video object for this bit
+    if 'W' in keyset and 'a' in keyset:
+        residual_movie = ResidualPMDMovie(pmd_object, grayscale_signal_object, background_movie)
+        add_kwargs = {'name':'Residual'}
+        layer_type = "image"
+        layer_list.append((residual_movie, add_kwargs, layer_type))
     
     return layer_list
 
