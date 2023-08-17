@@ -9,6 +9,7 @@ import numpy as np
 from numpy.typing import DTypeLike
 import scipy
 import scipy.sparse
+import random
 
 from typing import (
     TYPE_CHECKING,
@@ -38,6 +39,98 @@ Index = Union[int, slice, ellipsis]
 
 from napari.layers._data_protocols import LayerDataProtocol
 from napari.layers.image._image_utils import guess_multiscale
+
+
+def generate_color_movie(a_use, c_use, dims, seed=999):
+    '''
+    Function generates a demixing video in which each neuron is assigned its own color
+    args:
+        a_use: ndarray. Dimensions (d1, d2, K). Provides the spatial footprints of K neurons over a (d1 x d2)-pixel field of view
+        c_use: ndarray, (K, T). Provides temporal traces of K neurons over a T-frame video
+        dims: tuple, (x,y). Provides dimensions of video (x * y = d)
+        random_values: np.ndarray of shape (K, 3) (random color values assigned to each neural signal in the color movie).
+        seed: int. Seed for random color generation. Set this to make random generation deterministic
+    '''
+
+    rgbrange = [80, 255]
+    np.random.seed(seed) #seed for random color generation (to keep it consistent if desired)
+    random_values = np.array([random.randint(rgbrange[0],rgbrange[1]) for i in range(channels*a.shape[2])]).reshape((a.shape[2], channels))
+    final_movie = np.zeros((dims[0], dims[1], 3, c_use.shape[1])) #z is number of planes, and 3 is because we use RGB data
+    sum_random_values = np.sum(random_values, axis = 1, keepdims = True)
+    random_color_norm = random_values / sum_random_values
+    
+    c_color = np.zeros((c_use.shape[0], 3, c_use.shape[1]))
+    for i in range(3):
+        c_color[:, i, :] = random_color_norm[:, [i]] * c_use
+        
+    final_movie = np.tensordot(a_use, c_color, axes = (2,0))
+    max_val = np.amax(final_movie)
+    if max_val != 0:
+        final_movie = final_movie / np.amax(final_movie) #Now it is back to 0 -- 1
+    return final_movie.squeeze()
+
+
+class ColorfulACMovie(LayerDataProtocol):  
+    def __init__(self, filepath, seed=999):
+        self.filepath = filepath
+        data = np.load(filepath, allow_pickle=True)
+        self.order = data['fov_order'].item()
+        self.d1, self.d2 = data['fov_shape']
+        self.a_dense = data['a'].reshape((self.d1, self.d2, -1), order=self.order)
+        self.a = scipy.sparse.csr_matrix(data['a']) #For now, data['a'] is a dense array. If API changes, adjust this
+        
+        self.c = data['c'].T
+        self.T = self.c.shape[1]
+        self.var_img = data['noise_var_img']
+        self.row_indices = np.arange(self.d1*self.d2).reshape((self.d1, self.d2), order=self.order)
+    
+        rgbrange = [80, 255]
+        channels = 3
+        np.random.seed(seed) #seed for random color generation (to keep it consistent if desired)
+        random_values = np.array([random.randint(rgbrange[0],rgbrange[1]) for i in range(channels*self.a_dense.shape[2])]).reshape((self.a_dense.shape[2], channels))
+        sum_random_values = np.sum(random_values, axis = 1, keepdims = True)
+        random_color_norm = random_values / sum_random_values
+        
+        c_color = np.zeros((self.c.shape[0], 3, self.c.shape[1]))
+        for i in range(3):
+            c_color[:, i, :] = random_color_norm[:, [i]] * self.c
+
+        self.c_color = c_color
+    @property
+    def dtype(self) -> DTypeLike:
+        """Data type of the array elements."""
+        return np.float32 ##Maybe change this...
+
+
+    @property
+    def ndim(self) -> int:
+        """
+        Returns number of dimensions of data
+        """
+        return 2
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Array dimensions."""
+        return (self.T, self.d1, self.d2, 3)
+
+    def __getitem__(
+        self, key #: Union[Index, Tuple[Index, ...], LayerDataProtocol]
+    ) -> LayerDataProtocol:
+        """Returns self[key]. Compute Proj_{UR} W(UV - b) + b"""
+        if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing time points in this case -- the common use case
+            c_color_crop = self.c_color[:, :, key[0]]
+            output = (self.a.dot(c_color_crop)).reshape((self.d1, self.d2, 3), order=self.order)
+        else: #In this case we are taking slices across time
+            c_color_crop = self.c_color[:, :, key[0]]
+            slice_a = self.a_dense[(key[1], key[2], slice(None, None, None))]
+            output = np.tensordot(self.a_dense[(key[1], key[2], slice(None, None, None))], c_color_crop, axes=(len(slice_a.shape)-1, 0))
+            output = output.swapaxes(-1, -2)
+            '''The output here will have as its last two dimensions (3, T) assuming we did a slice within the first two dimensions. To make this play
+            nicely with 
+            '''
+        return output.squeeze().astype(self.dtype)
+
 
 class BackgroundPMDMovie(LayerDataProtocol):  
     def __init__(self, filepath):
@@ -146,7 +239,7 @@ class ResidualPMDMovie(LayerDataProtocol):
         if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing rows
             output -= self.mean_img
         else: #In this case we are taking slices across time
-            output -= self.mean_img[(key[1], key[2])]
+            output -= self.mean_img[(key[1], key[2], None)]
         return output.squeeze().astype(self.dtype)
 
 
@@ -307,19 +400,25 @@ def PMD_frame_generate(path):
         print("successsfully added AC")
     
     if 'a' in keyset:
-        pass #Here insert the colored PMD video
+        color_movie = ColorfulACMovie(path)
+        add_kwargs = {'name':'Colored Signals','rgb':True}
+        layer_type="image"
+        layer_list.append((color_movie, add_kwargs, layer_type))
+        print("Successfully added colorful movie")
     
     if 'W' in keyset:
         background_movie =  BackgroundPMDMovie(path)
         add_kwargs = {'name':'Background'} 
         layer_type = "image"
         layer_list.append((background_movie, add_kwargs, layer_type))
+        print("Successfully added background movie")
     
     if 'W' in keyset and 'a' in keyset:
         residual_movie = ResidualPMDMovie(pmd_object, grayscale_signal_object, background_movie)
         add_kwargs = {'name':'Residual'}
         layer_type = "image"
         layer_list.append((residual_movie, add_kwargs, layer_type))
+        print("Successfully added residual movie")
     
     return layer_list
 
