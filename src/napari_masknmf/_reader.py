@@ -40,36 +40,6 @@ Index = Union[int, slice, ellipsis]
 from napari.layers._data_protocols import LayerDataProtocol
 from napari.layers.image._image_utils import guess_multiscale
 
-
-def generate_color_movie(a_use, c_use, dims, seed=999):
-    '''
-    Function generates a demixing video in which each neuron is assigned its own color
-    args:
-        a_use: ndarray. Dimensions (d1, d2, K). Provides the spatial footprints of K neurons over a (d1 x d2)-pixel field of view
-        c_use: ndarray, (K, T). Provides temporal traces of K neurons over a T-frame video
-        dims: tuple, (x,y). Provides dimensions of video (x * y = d)
-        random_values: np.ndarray of shape (K, 3) (random color values assigned to each neural signal in the color movie).
-        seed: int. Seed for random color generation. Set this to make random generation deterministic
-    '''
-
-    rgbrange = [80, 255]
-    np.random.seed(seed) #seed for random color generation (to keep it consistent if desired)
-    random_values = np.array([random.randint(rgbrange[0],rgbrange[1]) for i in range(channels*a.shape[2])]).reshape((a.shape[2], channels))
-    final_movie = np.zeros((dims[0], dims[1], 3, c_use.shape[1])) #z is number of planes, and 3 is because we use RGB data
-    sum_random_values = np.sum(random_values, axis = 1, keepdims = True)
-    random_color_norm = random_values / sum_random_values
-    
-    c_color = np.zeros((c_use.shape[0], 3, c_use.shape[1]))
-    for i in range(3):
-        c_color[:, i, :] = random_color_norm[:, [i]] * c_use
-        
-    final_movie = np.tensordot(a_use, c_color, axes = (2,0))
-    max_val = np.amax(final_movie)
-    if max_val != 0:
-        final_movie = final_movie / np.amax(final_movie) #Now it is back to 0 -- 1
-    return final_movie.squeeze()
-
-
 class ColorfulACMovie(LayerDataProtocol):  
     def __init__(self, filepath, seed=999):
         self.filepath = filepath
@@ -120,7 +90,11 @@ class ColorfulACMovie(LayerDataProtocol):
         """Returns self[key]. Compute Proj_{UR} W(UV - b) + b"""
         if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing time points in this case -- the common use case
             c_color_crop = self.c_color[:, :, key[0]]
-            output = (self.a.dot(c_color_crop)).reshape((self.d1, self.d2, 3), order=self.order)
+            if type(key[0]) is not slice:
+                output = (self.a.dot(c_color_crop)).reshape((self.d1, self.d2, 3), order=self.order)
+            else:
+                output = np.tensordot(self.a_dense, c_color_crop, axes = (len(c_color_crop.shape)-1, 0))
+                output = output.swapaxes(-1, -2)
         else: #In this case we are taking slices across time
             c_color_crop = self.c_color[:, :, key[0]]
             slice_a = self.a_dense[(key[1], key[2], slice(None, None, None))]
@@ -178,7 +152,11 @@ class BackgroundPMDMovie(LayerDataProtocol):
         """Returns self[key]. Compute Proj_{UR} W(UV - b) + b"""
         if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing rows
             W_used = self.W
-            left_term = self.U_sparse.dot(self.V[:, [key[0]]]) - self.b
+            left_term = self.U_sparse.dot(self.V[:, key[0]])
+            if len(left_term.shape) == 1:
+                left_term = left_term[:, None] - self.b
+            else:
+                left_term -= self.b
             implied_fov_shape = (self.d1, self.d2)
             output = (W_used.dot(left_term) + self.b)#self.var_img
             output = self.U_sparse.T.dot(output)
@@ -237,7 +215,10 @@ class ResidualPMDMovie(LayerDataProtocol):
         """Returns self[key]. Compute Proj_{UR} W(UV - b) + b"""
         output = self.PMDMovie[key] - self.ACMovie[key] - self.BackgroundMovie[key]
         if key[1] == slice(None, None, None) and key[2] == slice(None, None, None): #Only slicing rows
-            output -= self.mean_img
+            if type(key[0]) is slice:
+                output -= self.mean_img[:, :, None]
+            else:
+                output -= self.mean_img
         else: #In this case we are taking slices across time
             output -= self.mean_img[(key[1], key[2], None)]
         return output.squeeze().astype(self.dtype)
